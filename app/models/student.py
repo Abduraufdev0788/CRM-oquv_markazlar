@@ -10,7 +10,6 @@ from app.models.base import BaseModel
 if TYPE_CHECKING:
     from app.models.academic import Enrollment
     from app.models.finance import Payment
-    from app.models.iot import FaceLog
     from app.models.lesson import Grade
     from app.models.system import Notification
 
@@ -61,5 +60,7 @@ class Student(BaseModel):
     enrollments: Mapped[List["Enrollment"]] = relationship(back_populates="student")
     payments: Mapped[List["Payment"]] = relationship(back_populates="student")
     grades: Mapped[List["Grade"]] = relationship(back_populates="student")
-    face_logs: Mapped[List["FaceLog"]] = relationship(back_populates="student")
+    # face_logs: FaceLog.face_data_id == Student.face_data_id (string match, FK yo'q)
+    # Shuning uchun Student->FaceLog direct relationship o'chirildi.
+    # FaceLog.student viewonly relationship orqali o'qiladi.
     notifications: Mapped[List["Notification"]] = relationship(back_populates="student")

@@ -62,8 +62,10 @@ class FaceLog(BaseModel):
 
     # Relationships
     device: Mapped["FaceDevice"] = relationship(back_populates="face_logs")
+    # Student FK yo'q — face_data_id (string) orqali bog'lanadi, shuning uchun viewonly
     student: Mapped[Optional["Student"]] = relationship(
-        primaryjoin="FaceLog.face_data_id == foreign(Student.face_data_id)",
+        "Student",
+        primaryjoin="foreign(FaceLog.face_data_id) == Student.face_data_id",
         viewonly=True,
     )
     attendance: Mapped[Optional["Attendance"]] = relationship(back_populates="face_log")

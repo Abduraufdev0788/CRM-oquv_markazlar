@@ -11,36 +11,55 @@ from app.database import get_db
 from app.models.student import Student, StudentStatus
 from app.core.dependencies import get_current_active_user, require_roles
 from app.models.user import User, UserRole
+from app.schemas import (
+    StudentCreate, StudentUpdate, StudentResponse,
+    StudentBriefResponse, PaginatedResponse, MessageResponse,
+)
 
 router = APIRouter(prefix="/students", tags=["Students"])
 
 AnyStaff = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TEACHER))
 ManagerOrAdmin = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER))
+AdminOnly = Depends(require_roles(UserRole.ADMIN))
 
 
-@router.get("/", summary="O'quvchilar ro'yxati")
+@router.get(
+    "/",
+    response_model=PaginatedResponse[StudentBriefResponse],
+    summary="O'quvchilar ro'yxati (filter + pagination)",
+)
 async def list_students(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, AnyStaff],
-    status: Optional[StudentStatus] = Query(None),
+    student_status: Optional[StudentStatus] = Query(None, alias="status"),
     search: Optional[str] = Query(None, description="Ism yoki telefon bo'yicha qidirish"),
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
 ):
     query = select(Student)
-    if status:
-        query = query.where(Student.status == status)
+    if student_status:
+        query = query.where(Student.status == student_status)
     if search:
         query = query.where(
             Student.full_name.ilike(f"%{search}%") | Student.phone.ilike(f"%{search}%")
         )
-    query = query.offset(skip).limit(limit).order_by(Student.created_at.desc())
-    result = await db.execute(query)
-    students = result.scalars().all()
-    return {"data": students, "count": len(students)}
+
+    # Total count
+    count_q = select(func.count()).select_from(query.subquery())
+    total = (await db.execute(count_q)).scalar_one()
+
+    # Data
+    data_q = query.offset(skip).limit(limit).order_by(Student.created_at.desc())
+    students = (await db.execute(data_q)).scalars().all()
+
+    return PaginatedResponse.create(data=students, total=total, skip=skip, limit=limit)
 
 
-@router.get("/{student_id}", summary="O'quvchi profili")
+@router.get(
+    "/{student_id}",
+    response_model=StudentResponse,
+    summary="O'quvchi to'liq profili (parent nested)",
+)
 async def get_student(
     student_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -53,22 +72,43 @@ async def get_student(
     return student
 
 
-@router.post("/", status_code=status.HTTP_201_CREATED, summary="Yangi o'quvchi qo'shish")
+@router.post(
+    "/",
+    response_model=StudentResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Yangi o'quvchi qo'shish",
+)
 async def create_student(
-    data: dict,
+    data: StudentCreate,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, ManagerOrAdmin],
 ):
-    student = Student(**data)
+    # Telefon raqam takrorlanmasligini tekshirish
+    if data.phone:
+        exists = (await db.execute(
+            select(Student).where(Student.phone == data.phone)
+        )).scalar_one_or_none()
+        if exists:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Bu telefon raqam allaqachon ro'yxatdan o'tgan",
+            )
+
+    student = Student(**data.model_dump())
     db.add(student)
     await db.flush()
+    await db.refresh(student)
     return student
 
 
-@router.put("/{student_id}", summary="O'quvchi ma'lumotlarini yangilash")
+@router.put(
+    "/{student_id}",
+    response_model=StudentResponse,
+    summary="O'quvchi ma'lumotlarini yangilash",
+)
 async def update_student(
     student_id: uuid.UUID,
-    data: dict,
+    data: StudentUpdate,
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, ManagerOrAdmin],
 ):
@@ -76,21 +116,31 @@ async def update_student(
     student = result.scalar_one_or_none()
     if not student:
         raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
-    for key, value in data.items():
-        if hasattr(student, key):
-            setattr(student, key, value)
+
+    # Faqat yuborilgan maydonlarni yangilash (PATCH uslubi)
+    update_data = data.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(student, key, value)
+
+    await db.flush()
+    await db.refresh(student)
     return student
 
 
-@router.delete("/{student_id}", summary="O'quvchini o'chirish (soft delete)")
+@router.delete(
+    "/{student_id}",
+    response_model=MessageResponse,
+    summary="O'quvchini o'chirish (soft delete — status EXPELLED ga o'tadi)",
+)
 async def delete_student(
     student_id: uuid.UUID,
     db: Annotated[AsyncSession, Depends(get_db)],
-    current_user: Annotated[User, Depends(require_roles(UserRole.ADMIN))],
+    current_user: Annotated[User, AdminOnly],
 ):
     result = await db.execute(select(Student).where(Student.id == student_id))
     student = result.scalar_one_or_none()
     if not student:
         raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
+
     student.status = StudentStatus.EXPELLED
-    return {"detail": "O'quvchi o'chirildi (status: expelled)"}
+    return MessageResponse(detail=f"{student.full_name} o'chirildi (status: expelled)")

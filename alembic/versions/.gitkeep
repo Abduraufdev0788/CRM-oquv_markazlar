@@ -1,0 +1,5 @@
+# Bu papka Alembic migratsiya fayllarini saqlaydi.
+# Birinchi migratsiyani yaratish uchun:
+#
+#   alembic revision --autogenerate -m "initial"
+#   alembic upgrade head
