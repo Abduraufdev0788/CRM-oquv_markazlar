@@ -7,6 +7,7 @@ from sqlalchemy import select
 from app.database import get_db
 from app.core.security import decode_access_token
 from app.models.user import User, UserRole
+from app.models.student import Student, StudentStatus
 
 bearer_scheme = HTTPBearer()
 
@@ -65,3 +66,30 @@ def require_roles(*roles: UserRole):
 AdminOnly = Depends(require_roles(UserRole.ADMIN))
 ManagerOrAdmin = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER))
 AnyStaff = Depends(require_roles(UserRole.ADMIN, UserRole.MANAGER, UserRole.TEACHER))
+
+
+async def get_current_student(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+) -> Student:
+    """JWT tokendan joriy o'quvchini olish."""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Token noto'g'ri yoki muddati o'tgan (O'quvchi)",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    payload = decode_access_token(credentials.credentials)
+    if payload is None:
+        raise credentials_exception
+
+    user_id: str = payload.get("sub")
+    role: str = payload.get("role")
+    
+    if user_id is None or role != "student":
+        raise credentials_exception
+
+    result = await db.execute(select(Student).where(Student.id == user_id, Student.status == StudentStatus.ACTIVE))
+    student = result.scalar_one_or_none()
+    if student is None:
+        raise credentials_exception
+    return student

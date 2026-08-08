@@ -4,6 +4,7 @@ from app.api.v1 import (
     auth, users, parents, students,
     groups, lessons, finance,
     attendance, face, reports, dashboard,
+    student_portal
 )
 
 api_router = APIRouter(prefix="/api/v1")
@@ -19,3 +20,4 @@ api_router.include_router(finance.router)
 api_router.include_router(attendance.router)
 api_router.include_router(face.router)
 api_router.include_router(reports.router)
+api_router.include_router(student_portal.router)

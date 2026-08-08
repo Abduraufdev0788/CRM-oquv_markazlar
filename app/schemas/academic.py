@@ -10,6 +10,7 @@ from pydantic import field_validator, model_validator, Field
 
 from app.schemas.base import BaseSchema, BaseResponse
 from app.schemas.user import UserBriefResponse
+from app.schemas.student import StudentBriefResponse
 from app.models.academic import GroupStatus, EnrollmentStatus
 
 
@@ -213,3 +214,4 @@ class EnrollmentResponse(BaseResponse):
     notes: Optional[str]
     # Nested uchun
     group: Optional[GroupBriefResponse] = None
+    student: Optional[StudentBriefResponse] = None

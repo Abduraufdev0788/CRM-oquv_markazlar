@@ -7,6 +7,7 @@ from typing import Annotated
 
 from app.database import get_db
 from app.models.user import User, RefreshToken
+from app.models.student import Student, StudentStatus
 from app.core.security import (
     verify_password, create_access_token,
     create_refresh_token, hash_token
@@ -64,6 +65,46 @@ async def login(
         "refresh_token": raw_refresh,
         "token_type": "bearer",
         "role": user.role,
+    }
+
+
+@router.post("/student-login", summary="O'quvchi kabinetiga kirish")
+async def student_login(
+    form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    # O'quvchi form_data.username ga o'z telefonini kiritadi
+    result = await db.execute(
+        select(Student).where(Student.phone == form_data.username, Student.status == StudentStatus.ACTIVE)
+    )
+    student = result.scalar_one_or_none()
+
+    if not student:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Telefon raqam xato",
+        )
+
+    # Parol mantiqini tekshirish (Tug'ilgan sana)
+    valid_passwords = ["123456"] # Agar tug'ilgan sana kiritilmagan bo'lsa
+    if student.birth_date:
+        valid_passwords.append(student.birth_date.strftime("%Y-%m-%d"))
+        valid_passwords.append(student.birth_date.strftime("%d%m%Y"))
+        valid_passwords.append(student.birth_date.strftime("%d.%m.%Y"))
+
+    if form_data.password not in valid_passwords:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Parol (Tug'ilgan sana) noto'g'ri. Masalan: 2005-10-15 yoki 15102005",
+        )
+
+    # JWT token yaratamiz, role="student" qilib belgilaymiz
+    access_token = create_access_token(data={"sub": str(student.id), "role": "student"})
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "role": "student",
     }
 
 

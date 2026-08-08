@@ -7,9 +7,11 @@ from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models.user import User, UserRole
+from app.models.student import Student, StudentStatus
 from app.models.academic import Course, Room, Group, Enrollment, GroupStatus, EnrollmentStatus
 from app.core.dependencies import require_roles
 from app.schemas import (
@@ -118,6 +120,40 @@ async def update_room(
 
 
 # ── GROUPS ─────────────────────────────────────────────────────────────────────
+async def _auto_activate_groups(db: AsyncSession):
+    """Boshlanish sanasi yetib kelgan guruhlarni va ularning o'quvchilarini Aktiv holatga o'tkazish"""
+    today = date.today()
+    # PLANNED bo'lgan va boshlanish sanasi bugun yoki avval bo'lgan guruhlarni topish
+    res = await db.execute(
+        select(Group).where(Group.status == GroupStatus.PLANNED, Group.start_date <= today)
+    )
+    groups_to_activate = res.scalars().all()
+    
+    if not groups_to_activate:
+        return
+        
+    for group in groups_to_activate:
+        group.status = GroupStatus.ACTIVE
+        
+        # Ushbu guruhga biriktirilgan va INACTIVE bo'lgan o'quvchilarni topish
+        # (Enrollment orqali ulanish)
+        enr_res = await db.execute(
+            select(Enrollment).where(Enrollment.group_id == group.id)
+        )
+        enrollments = enr_res.scalars().all()
+        student_ids = [e.student_id for e in enrollments]
+        
+        if student_ids:
+            # O'quvchilar statusini ACTIVE qilish
+            students_res = await db.execute(
+                select(Student).where(Student.id.in_(student_ids), Student.status == StudentStatus.INACTIVE)
+            )
+            for student in students_res.scalars().all():
+                student.status = StudentStatus.ACTIVE
+                
+    await db.commit()
+
+
 @router.get("/groups/", response_model=PaginatedResponse[GroupBriefResponse], summary="Guruhlar ro'yxati")
 async def list_groups(
     db: Annotated[AsyncSession, Depends(get_db)],
@@ -127,6 +163,8 @@ async def list_groups(
     teacher_id: Optional[uuid.UUID] = Query(None),
     skip: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100),
 ):
+    await _auto_activate_groups(db)
+
     if current_user.role == UserRole.TEACHER:
         teacher_id = current_user.id
     query = select(Group)
@@ -147,7 +185,13 @@ async def get_group(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, AnyStaff],
 ):
-    group = (await db.execute(select(Group).where(Group.id == group_id))).scalar_one_or_none()
+    await _auto_activate_groups(db)
+
+    group = (await db.execute(
+        select(Group)
+        .options(selectinload(Group.teacher), selectinload(Group.course))
+        .where(Group.id == group_id)
+    )).scalar_one_or_none()
     if not group:
         raise HTTPException(status_code=404, detail="Guruh topilmadi")
     if current_user.role == UserRole.TEACHER and group.teacher_id != current_user.id:
@@ -182,8 +226,15 @@ async def create_group(
         schedule=[item.model_dump() for item in data.schedule],
     )
     db.add(group)
-    await db.flush()
-    await db.refresh(group)
+    await db.commit()
+    
+    # Reload with relationships
+    group = (await db.execute(
+        select(Group)
+        .options(selectinload(Group.teacher), selectinload(Group.course))
+        .where(Group.id == group.id)
+    )).scalar_one()
+    
     return group
 
 
@@ -193,7 +244,11 @@ async def update_group(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, ManagerOrAdmin],
 ):
-    group = (await db.execute(select(Group).where(Group.id == group_id))).scalar_one_or_none()
+    group = (await db.execute(
+        select(Group)
+        .options(selectinload(Group.teacher), selectinload(Group.course))
+        .where(Group.id == group_id)
+    )).scalar_one_or_none()
     if not group:
         raise HTTPException(status_code=404, detail="Guruh topilmadi")
     upd = data.model_dump(exclude_unset=True)
@@ -201,8 +256,7 @@ async def update_group(
         upd["schedule"] = [i.model_dump() for i in data.schedule]
     for k, v in upd.items():
         setattr(group, k, v)
-    await db.flush()
-    await db.refresh(group)
+    await db.commit()
     return group
 
 
@@ -231,16 +285,24 @@ async def enroll_student(
             raise HTTPException(status_code=409, detail="O'quvchi bu guruhda allaqachon faol")
         existing.status = EnrollmentStatus.ACTIVE
         existing.dropped_at = None
-        await db.flush()
-        await db.refresh(existing)
+        await db.commit()
+        existing = (await db.execute(
+            select(Enrollment)
+            .options(selectinload(Enrollment.group), selectinload(Enrollment.student))
+            .where(Enrollment.id == existing.id)
+        )).scalar_one()
         return existing
     enrollment = Enrollment(
         student_id=data.student_id, group_id=group_id,
         discount_pct=data.discount_pct, notes=data.notes, enrolled_at=date.today(),
     )
     db.add(enrollment)
-    await db.flush()
-    await db.refresh(enrollment)
+    await db.commit()
+    enrollment = (await db.execute(
+        select(Enrollment)
+        .options(selectinload(Enrollment.group), selectinload(Enrollment.student))
+        .where(Enrollment.id == enrollment.id)
+    )).scalar_one()
     return enrollment
 
 
@@ -250,7 +312,11 @@ async def update_enrollment(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, ManagerOrAdmin],
 ):
-    enrollment = (await db.execute(select(Enrollment).where(Enrollment.id == enrollment_id))).scalar_one_or_none()
+    enrollment = (await db.execute(
+        select(Enrollment)
+        .options(selectinload(Enrollment.group), selectinload(Enrollment.student))
+        .where(Enrollment.id == enrollment_id)
+    )).scalar_one_or_none()
     if not enrollment:
         raise HTTPException(status_code=404, detail="Enrollment topilmadi")
     upd = data.model_dump(exclude_unset=True)
@@ -258,8 +324,7 @@ async def update_enrollment(
         upd["dropped_at"] = date.today()
     for k, v in upd.items():
         setattr(enrollment, k, v)
-    await db.flush()
-    await db.refresh(enrollment)
+    await db.commit()
     return enrollment
 
 
@@ -270,7 +335,11 @@ async def group_students(
     current_user: Annotated[User, AnyStaff],
     enroll_status: Optional[EnrollmentStatus] = Query(EnrollmentStatus.ACTIVE, alias="status"),
 ):
-    query = select(Enrollment).where(Enrollment.group_id == group_id)
+    query = (
+        select(Enrollment)
+        .options(selectinload(Enrollment.group), selectinload(Enrollment.student))
+        .where(Enrollment.group_id == group_id)
+    )
     if enroll_status:
         query = query.where(Enrollment.status == enroll_status)
     return (await db.execute(query)).scalars().all()
