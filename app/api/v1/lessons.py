@@ -12,12 +12,13 @@ from app.models.user import User, UserRole
 from app.models.lesson import Lesson, Homework, Grade
 from app.models.academic import Group
 from app.core.dependencies import require_roles
-from app.schemas import (
-    LessonCreate, LessonUpdate, LessonResponse,
+from app.schemas.lesson import (
+    LessonCreate, LessonUpdate, LessonResponse, LessonBriefResponse,
     HomeworkCreate, HomeworkUpdate, HomeworkResponse,
-    GradeCreate, GradeUpdate, GradeResponse,
-    PaginatedResponse, MessageResponse,
+    HomeworkSubmissionResponse,
+    GradeCreate, GradeUpdate, GradeResponse, StudentGradeSummary,
 )
+from app.schemas.base import PaginatedResponse, MessageResponse
 
 router = APIRouter(tags=["Lessons (Darslar va Baholar)"])
 
@@ -90,6 +91,15 @@ async def update_lesson(
 # ═══════════════════════════════════════════════════════════════════════════════
 # HOMEWORKS
 # ═══════════════════════════════════════════════════════════════════════════════
+@router.get("/lessons/{lesson_id}/homeworks", response_model=list[HomeworkResponse], summary="Darsning uy vazifalarini olish")
+async def get_lesson_homeworks(
+    lesson_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, AnyStaff],
+):
+    hws = (await db.execute(select(Homework).where(Homework.lesson_id == lesson_id))).scalars().all()
+    return hws
+
 @router.post(
     "/lessons/{lesson_id}/homework",
     response_model=HomeworkResponse,
@@ -128,6 +138,24 @@ async def update_homework(
     await db.flush()
     await db.refresh(hw)
     return hw
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# HOMEWORK SUBMISSIONS (TEACHER VIEW)
+# ═══════════════════════════════════════════════════════════════════════════════
+@router.get("/homework/{hw_id}/submissions", response_model=list[HomeworkSubmissionResponse], summary="Vazifa javoblarini ko'rish")
+async def get_homework_submissions(
+    hw_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, TeacherOrAbove],
+):
+    from app.models.lesson import HomeworkSubmission
+    hw = (await db.execute(select(Homework).where(Homework.id == hw_id))).scalar_one_or_none()
+    if not hw:
+        raise HTTPException(status_code=404, detail="Uy vazifasi topilmadi")
+    
+    subs = (await db.execute(select(HomeworkSubmission).where(HomeworkSubmission.homework_id == hw_id))).scalars().all()
+    return subs
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -2,7 +2,7 @@
 Groups & Enrollment API — /api/v1/groups/, /api/v1/courses/, /api/v1/rooms/
 """
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -129,9 +129,6 @@ async def _auto_activate_groups(db: AsyncSession):
     )
     groups_to_activate = res.scalars().all()
     
-    if not groups_to_activate:
-        return
-        
     for group in groups_to_activate:
         group.status = GroupStatus.ACTIVE
         
@@ -151,6 +148,13 @@ async def _auto_activate_groups(db: AsyncSession):
             for student in students_res.scalars().all():
                 student.status = StudentStatus.ACTIVE
                 
+    # ACTIVE bo'lgan lekin boshlanish sanasi kelajakda bo'lgan guruhlarni PLANNED ga qaytarish
+    res_deactivate = await db.execute(
+        select(Group).where(Group.status == GroupStatus.ACTIVE, Group.start_date > today)
+    )
+    for group in res_deactivate.scalars().all():
+        group.status = GroupStatus.PLANNED
+        
     await db.commit()
 
 
@@ -167,9 +171,11 @@ async def list_groups(
 
     if current_user.role == UserRole.TEACHER:
         teacher_id = current_user.id
-    query = select(Group)
+    query = select(Group).options(selectinload(Group.room), selectinload(Group.course))
     if group_status:
         query = query.where(Group.status == group_status)
+    else:
+        query = query.where(Group.status != GroupStatus.ARCHIVED)
     if course_id:
         query = query.where(Group.course_id == course_id)
     if teacher_id:
@@ -189,7 +195,7 @@ async def get_group(
 
     group = (await db.execute(
         select(Group)
-        .options(selectinload(Group.teacher), selectinload(Group.course))
+        .options(selectinload(Group.teacher), selectinload(Group.course), selectinload(Group.room))
         .where(Group.id == group_id)
     )).scalar_one_or_none()
     if not group:
@@ -204,6 +210,97 @@ async def get_group(
     result = GroupResponse.model_validate(group)
     result.enrolled_count = count
     return result
+
+
+@router.delete("/groups/{group_id}", response_model=MessageResponse, summary="Guruhni arxivlash (soft delete)")
+async def delete_group(
+    group_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, ManagerOrAdmin],
+):
+    group = (await db.execute(select(Group).where(Group.id == group_id))).scalar_one_or_none()
+    if not group:
+        raise HTTPException(status_code=404, detail="Guruh topilmadi")
+    
+    group.status = GroupStatus.ARCHIVED
+    
+    # Guruhdagi barcha aktiv o'quvchilarni DROPPED holatiga o'tkazish
+    enrollments = (await db.execute(
+        select(Enrollment).where(
+            Enrollment.group_id == group_id,
+            Enrollment.status == EnrollmentStatus.ACTIVE
+        )
+    )).scalars().all()
+    for enr in enrollments:
+        enr.status = EnrollmentStatus.DROPPED
+        enr.dropped_at = date.today()
+
+    await db.commit()
+    return MessageResponse(detail=f"{group.name} arxivlandi")
+
+
+async def check_room_availability(db: AsyncSession, room_id: uuid.UUID, schedule: list, exclude_group_id: uuid.UUID = None):
+    if not room_id or not schedule:
+        return
+    
+    query = select(Group).where(
+        Group.room_id == room_id,
+        Group.status.in_([GroupStatus.ACTIVE, GroupStatus.PLANNED])
+    )
+    if exclude_group_id:
+        query = query.where(Group.id != exclude_group_id)
+        
+    existing_groups = (await db.execute(query)).scalars().all()
+    
+    for new_sch in schedule:
+        new_day = new_sch.day if hasattr(new_sch, 'day') else new_sch.get("day")
+        new_start = new_sch.start if hasattr(new_sch, 'start') else new_sch.get("start")
+        new_end = new_sch.end if hasattr(new_sch, 'end') else new_sch.get("end")
+        
+        for eg in existing_groups:
+            if not eg.schedule:
+                continue
+            for eg_sch in eg.schedule:
+                if eg_sch.get("day") == new_day:
+                    eg_start = eg_sch.get("start")
+                    eg_end = eg_sch.get("end")
+                    if new_start < eg_end and eg_start < new_end:
+                        raise HTTPException(
+                            status_code=400, 
+                            detail=f"Xona bu vaqtda band (Boshqa guruh: {eg.name}, Kun: {new_day}, Vaqt: {eg_start}-{eg_end})"
+                        )
+
+
+async def check_teacher_availability(db: AsyncSession, teacher_id: uuid.UUID, schedule: list, exclude_group_id: uuid.UUID = None):
+    if not teacher_id or not schedule:
+        return
+    
+    query = select(Group).where(
+        Group.teacher_id == teacher_id,
+        Group.status.in_([GroupStatus.ACTIVE, GroupStatus.PLANNED])
+    )
+    if exclude_group_id:
+        query = query.where(Group.id != exclude_group_id)
+        
+    existing_groups = (await db.execute(query)).scalars().all()
+    
+    for new_sch in schedule:
+        new_day = new_sch.day if hasattr(new_sch, 'day') else new_sch.get("day")
+        new_start = new_sch.start if hasattr(new_sch, 'start') else new_sch.get("start")
+        new_end = new_sch.end if hasattr(new_sch, 'end') else new_sch.get("end")
+        
+        for eg in existing_groups:
+            if not eg.schedule:
+                continue
+            for eg_sch in eg.schedule:
+                if eg_sch.get("day") == new_day:
+                    eg_start = eg_sch.get("start")
+                    eg_end = eg_sch.get("end")
+                    if new_start < eg_end and eg_start < new_end:
+                        raise HTTPException(
+                            status_code=400, 
+                            detail=f"Ustoz bu vaqtda band (Boshqa guruh: {eg.name}, Kun: {new_day}, Vaqt: {eg_start}-{eg_end})"
+                        )
 
 
 @router.post("/groups/", response_model=GroupResponse, status_code=201, summary="Yangi guruh")
@@ -221,21 +318,33 @@ async def create_group(
         )).scalar_one_or_none()
         if not teacher:
             raise HTTPException(status_code=404, detail="O'qituvchi topilmadi yoki roli TEACHER emas")
+            
+    if data.room_id and data.schedule:
+        await check_room_availability(db, data.room_id, data.schedule)
+    if data.teacher_id and data.schedule:
+        await check_teacher_availability(db, data.teacher_id, data.schedule)
+        
     group = Group(
         **{k: v for k, v in data.model_dump().items() if k != "schedule"},
         schedule=[item.model_dump() for item in data.schedule],
     )
+    if course.duration_months and not group.end_date:
+        group.end_date = group.start_date + timedelta(days=30 * course.duration_months)
     db.add(group)
     await db.commit()
+    
+    await _auto_activate_groups(db)
     
     # Reload with relationships
     group = (await db.execute(
         select(Group)
-        .options(selectinload(Group.teacher), selectinload(Group.course))
+        .options(selectinload(Group.teacher), selectinload(Group.course), selectinload(Group.room))
         .where(Group.id == group.id)
     )).scalar_one()
     
-    return group
+    result = GroupResponse.model_validate(group)
+    result.enrolled_count = 0
+    return result
 
 
 @router.put("/groups/{group_id}", response_model=GroupResponse, summary="Guruhni yangilash")
@@ -246,18 +355,48 @@ async def update_group(
 ):
     group = (await db.execute(
         select(Group)
-        .options(selectinload(Group.teacher), selectinload(Group.course))
+        .options(selectinload(Group.teacher), selectinload(Group.course), selectinload(Group.room))
         .where(Group.id == group_id)
     )).scalar_one_or_none()
     if not group:
         raise HTTPException(status_code=404, detail="Guruh topilmadi")
+        
     upd = data.model_dump(exclude_unset=True)
     if "schedule" in upd and data.schedule:
         upd["schedule"] = [i.model_dump() for i in data.schedule]
+        
+    room_id_to_check = upd.get("room_id", group.room_id)
+    teacher_id_to_check = upd.get("teacher_id", group.teacher_id)
+    schedule_to_check = upd.get("schedule", group.schedule)
+    
+    if room_id_to_check and schedule_to_check:
+        await check_room_availability(db, room_id_to_check, schedule_to_check, group_id)
+    if teacher_id_to_check and schedule_to_check:
+        await check_teacher_availability(db, teacher_id_to_check, schedule_to_check, group_id)
+        
     for k, v in upd.items():
         setattr(group, k, v)
     await db.commit()
-    return group
+    
+    await _auto_activate_groups(db)
+    
+    # Reload to ensure relationships are up-to-date and avoid lazy loading errors
+    group = (await db.execute(
+        select(Group)
+        .options(selectinload(Group.teacher), selectinload(Group.course), selectinload(Group.room))
+        .where(Group.id == group_id)
+    )).scalar_one()
+
+    # Get enrolled count
+    count = (await db.execute(
+        select(func.count()).where(
+            and_(Enrollment.group_id == group_id, Enrollment.status == EnrollmentStatus.ACTIVE)
+        )
+    )).scalar_one()
+
+    result = GroupResponse.model_validate(group)
+    result.enrolled_count = count
+    return result
 
 
 # ── ENROLLMENTS ────────────────────────────────────────────────────────────────
@@ -288,7 +427,7 @@ async def enroll_student(
         await db.commit()
         existing = (await db.execute(
             select(Enrollment)
-            .options(selectinload(Enrollment.group), selectinload(Enrollment.student))
+            .options(selectinload(Enrollment.group).selectinload(Group.room), selectinload(Enrollment.group).selectinload(Group.course), selectinload(Enrollment.student))
             .where(Enrollment.id == existing.id)
         )).scalar_one()
         return existing
@@ -300,7 +439,7 @@ async def enroll_student(
     await db.commit()
     enrollment = (await db.execute(
         select(Enrollment)
-        .options(selectinload(Enrollment.group), selectinload(Enrollment.student))
+        .options(selectinload(Enrollment.group).selectinload(Group.room), selectinload(Enrollment.group).selectinload(Group.course), selectinload(Enrollment.student))
         .where(Enrollment.id == enrollment.id)
     )).scalar_one()
     return enrollment
@@ -314,7 +453,7 @@ async def update_enrollment(
 ):
     enrollment = (await db.execute(
         select(Enrollment)
-        .options(selectinload(Enrollment.group), selectinload(Enrollment.student))
+        .options(selectinload(Enrollment.group).selectinload(Group.room), selectinload(Enrollment.group).selectinload(Group.course), selectinload(Enrollment.student))
         .where(Enrollment.id == enrollment_id)
     )).scalar_one_or_none()
     if not enrollment:
@@ -325,6 +464,13 @@ async def update_enrollment(
     for k, v in upd.items():
         setattr(enrollment, k, v)
     await db.commit()
+    
+    # Reload with relationships
+    enrollment = (await db.execute(
+        select(Enrollment)
+        .options(selectinload(Enrollment.group).selectinload(Group.room), selectinload(Enrollment.group).selectinload(Group.course), selectinload(Enrollment.student))
+        .where(Enrollment.id == enrollment_id)
+    )).scalar_one()
     return enrollment
 
 
@@ -337,7 +483,7 @@ async def group_students(
 ):
     query = (
         select(Enrollment)
-        .options(selectinload(Enrollment.group), selectinload(Enrollment.student))
+        .options(selectinload(Enrollment.group).selectinload(Group.room), selectinload(Enrollment.group).selectinload(Group.course), selectinload(Enrollment.student))
         .where(Enrollment.group_id == group_id)
     )
     if enroll_status:

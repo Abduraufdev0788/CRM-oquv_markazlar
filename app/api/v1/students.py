@@ -11,6 +11,7 @@ from app.database import get_db
 from app.models.student import Student, StudentStatus
 from app.core.dependencies import get_current_active_user, require_roles
 from app.models.user import User, UserRole
+from app.models.academic import Enrollment, EnrollmentStatus
 from app.schemas import (
     StudentCreate, StudentUpdate, StudentResponse,
     StudentBriefResponse, PaginatedResponse, MessageResponse,
@@ -143,4 +144,17 @@ async def delete_student(
         raise HTTPException(status_code=404, detail="O'quvchi topilmadi")
 
     student.status = StudentStatus.EXPELLED
-    return MessageResponse(detail=f"{student.full_name} o'chirildi (status: expelled)")
+    
+    # Guruhlardan chiqarish (barcha aktiv yozuvlarni DROPPED ga o'tkazish)
+    enrollments = (await db.execute(
+        select(Enrollment).where(
+            Enrollment.student_id == student_id,
+            Enrollment.status == EnrollmentStatus.ACTIVE
+        )
+    )).scalars().all()
+    
+    for enr in enrollments:
+        enr.status = EnrollmentStatus.DROPPED
+
+    await db.flush()
+    return MessageResponse(detail=f"{student.full_name} o'chirildi va guruhlardan chiqarildi")

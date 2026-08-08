@@ -153,9 +153,11 @@ class GroupCreate(BaseSchema):
 
 class GroupUpdate(BaseSchema):
     name: Optional[str] = Field(None, min_length=2, max_length=100)
+    course_id: Optional[uuid.UUID] = None
     room_id: Optional[uuid.UUID] = None
     teacher_id: Optional[uuid.UUID] = None
     status: Optional[GroupStatus] = None
+    start_date: Optional[date] = None
     end_date: Optional[date] = None
     max_students: Optional[int] = Field(None, ge=1, le=100)
     schedule: Optional[List[ScheduleItem]] = None
@@ -182,7 +184,12 @@ class GroupBriefResponse(BaseSchema):
     name: str
     status: GroupStatus
     start_date: date
+    end_date: Optional[date] = None
     max_students: int
+    schedule: List[dict] = Field(default_factory=list)
+    room_id: Optional[uuid.UUID] = None
+    room: Optional[RoomResponse] = None
+    course: Optional[CourseBriefResponse] = None
 
 
 # ── Enrollment Schemas ─────────────────────────────────────────────────────────

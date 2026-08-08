@@ -69,6 +69,7 @@ class UserCreate(BaseSchema):
 class UserUpdate(BaseSchema):
     """Xodim ma'lumotlarini yangilash — barcha maydon ixtiyoriy."""
     full_name: Optional[str] = Field(None, min_length=2, max_length=100)
+    phone: Optional[str] = None
     email: Optional[EmailStr] = None
     photo_url: Optional[str] = Field(None, max_length=255)
     is_active: Optional[bool] = None
@@ -103,3 +104,4 @@ class UserBriefResponse(BaseSchema):
     full_name: str
     phone: str
     role: UserRole
+    is_active: bool

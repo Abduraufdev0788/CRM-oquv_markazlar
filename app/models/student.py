@@ -60,6 +60,7 @@ class Student(BaseModel):
     enrollments: Mapped[List["Enrollment"]] = relationship(back_populates="student")
     payments: Mapped[List["Payment"]] = relationship(back_populates="student")
     grades: Mapped[List["Grade"]] = relationship(back_populates="student")
+    homework_submissions: Mapped[List["HomeworkSubmission"]] = relationship(back_populates="student")
     # face_logs: FaceLog.face_data_id == Student.face_data_id (string match, FK yo'q)
     # Shuning uchun Student->FaceLog direct relationship o'chirildi.
     # FaceLog.student viewonly relationship orqali o'qiladi.

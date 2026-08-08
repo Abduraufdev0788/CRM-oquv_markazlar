@@ -7,7 +7,7 @@ import uuid
 
 from app.database import get_db
 from app.models.student import Student
-from app.models.academic import Enrollment, EnrollmentStatus
+from app.models.academic import Enrollment, EnrollmentStatus, Group, GroupStatus
 from app.models.lesson import Lesson
 from app.models.iot import Attendance
 from app.models.finance import Payment
@@ -37,8 +37,13 @@ async def get_my_enrollments(
     # Guruhlar ro'yxati
     res = await db.execute(
         select(Enrollment)
-        .options(selectinload(Enrollment.group))
-        .where(Enrollment.student_id == student.id, Enrollment.status == EnrollmentStatus.ACTIVE)
+        .join(Group, Enrollment.group_id == Group.id)
+        .options(selectinload(Enrollment.group).selectinload(Group.course))
+        .where(
+            Enrollment.student_id == student.id, 
+            Enrollment.status == EnrollmentStatus.ACTIVE,
+            Group.status != GroupStatus.ARCHIVED
+        )
     )
     enrollments = res.scalars().all()
     
@@ -97,3 +102,96 @@ async def get_my_payments(
     )
     payments = res.scalars().all()
     return {"data": payments}
+
+
+@router.post("/homework/{hw_id}/submit", summary="Vazifani jo'natish")
+async def submit_homework(
+    hw_id: uuid.UUID,
+    student: CurrentStudent,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    content_text: str | None = None,
+    file_url: str | None = None,
+):
+    from app.models.lesson import Homework, HomeworkSubmission
+    from fastapi import HTTPException
+    
+    hw = (await db.execute(select(Homework).where(Homework.id == hw_id))).scalar_one_or_none()
+    if not hw:
+        raise HTTPException(status_code=404, detail="Uy vazifasi topilmadi")
+        
+    # Tekshiramiz: oldin yuborganmi?
+    existing = (await db.execute(
+        select(HomeworkSubmission).where(
+            and_(HomeworkSubmission.homework_id == hw_id, HomeworkSubmission.student_id == student.id)
+        )
+    )).scalar_one_or_none()
+    
+    if existing:
+        existing.content_text = content_text
+        existing.file_url = file_url
+        await db.flush()
+        await db.refresh(existing)
+        return {"message": "Javob yangilandi", "data": {"id": existing.id}}
+        
+    submission = HomeworkSubmission(
+        homework_id=hw_id,
+        student_id=student.id,
+        content_text=content_text,
+        file_url=file_url
+    )
+    db.add(submission)
+    await db.flush()
+    await db.refresh(submission)
+    return {"message": "Javob yuborildi", "data": {"id": submission.id}}
+
+@router.get("/homeworks", summary="O'quvchining vazifalari")
+async def get_my_homeworks(
+    student: CurrentStudent,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    limit: int = 50
+):
+    from app.models.lesson import Homework, HomeworkSubmission
+    
+    # 1. O'quvchi o'qiyotgan guruhlarni topamiz
+    group_ids_res = await db.execute(
+        select(Enrollment.group_id).where(Enrollment.student_id == student.id, Enrollment.status == EnrollmentStatus.ACTIVE)
+    )
+    group_ids = [r for r in group_ids_res.scalars().all()]
+    
+    if not group_ids:
+        return {"data": []}
+        
+    # 2. Shu guruhlarga tegishli darslarning vazifalarini topamiz
+    res = await db.execute(
+        select(Homework, Lesson.topic, Lesson.lesson_date, Group.name)
+        .join(Lesson, Homework.lesson_id == Lesson.id)
+        .join(Group, Lesson.group_id == Group.id)
+        .where(Lesson.group_id.in_(group_ids))
+        .order_by(Homework.created_at.desc())
+        .limit(limit)
+    )
+    
+    # 3. Yuborilgan javoblarni ham olib kelamiz
+    subs_res = await db.execute(
+        select(HomeworkSubmission).where(HomeworkSubmission.student_id == student.id)
+    )
+    my_subs = {sub.homework_id: sub for sub in subs_res.scalars().all()}
+    
+    data = []
+    for hw, l_topic, l_date, g_name in res.all():
+        sub = my_subs.get(hw.id)
+        data.append({
+            "id": hw.id,
+            "title": hw.title,
+            "description": hw.description,
+            "due_date": hw.due_date,
+            "max_score": hw.max_score,
+            "lesson_topic": l_topic,
+            "lesson_date": l_date,
+            "group_name": g_name,
+            "submitted": bool(sub),
+            "submission_content": sub.content_text if sub else None,
+            "submission_file": sub.file_url if sub else None,
+        })
+        
+    return {"data": data}

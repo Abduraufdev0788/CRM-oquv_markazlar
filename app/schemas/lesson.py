@@ -95,6 +95,22 @@ class HomeworkResponse(BaseResponse):
     file_url: Optional[str]
 
 
+# ── Homework Submission Schemas ────────────────────────────────────────────────
+class HomeworkSubmissionCreate(BaseSchema):
+    content_text: Optional[str] = None
+    file_url: Optional[str] = None
+
+class HomeworkSubmissionUpdate(BaseSchema):
+    content_text: Optional[str] = None
+    file_url: Optional[str] = None
+
+class HomeworkSubmissionResponse(BaseResponse):
+    homework_id: uuid.UUID
+    student_id: uuid.UUID
+    content_text: Optional[str]
+    file_url: Optional[str]
+
+
 # ── Grade Schemas ──────────────────────────────────────────────────────────────
 class GradeCreate(BaseSchema):
     student_id: uuid.UUID

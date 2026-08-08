@@ -54,6 +54,24 @@ class Homework(BaseModel):
     # Relationships
     lesson: Mapped["Lesson"] = relationship(back_populates="homeworks")
     grades: Mapped[List["Grade"]] = relationship(back_populates="homework")
+    submissions: Mapped[List["HomeworkSubmission"]] = relationship(back_populates="homework")
+
+
+class HomeworkSubmission(BaseModel):
+    __tablename__ = "homework_submissions"
+
+    homework_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("homeworks.id"), nullable=False, index=True
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("students.id"), nullable=False, index=True
+    )
+    content_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    file_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+
+    # Relationships
+    homework: Mapped["Homework"] = relationship(back_populates="submissions")
+    student: Mapped["Student"] = relationship(back_populates="homework_submissions")
 
 
 class GradeType(str, enum.Enum):
