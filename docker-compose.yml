@@ -96,6 +96,8 @@ services:
       - .:/app
     env_file:
       - .env
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://crm_user:strongpassword123@db:5432/educrm_db
     depends_on:
       - db
       - redis
