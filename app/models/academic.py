@@ -1,11 +1,11 @@
 import uuid
 import enum
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional, List, TYPE_CHECKING
 from sqlalchemy import (
-    String, Boolean, Date, SmallInteger, Numeric,
-    Enum as SAEnum, ForeignKey, UniqueConstraint
+    String, Boolean, Date, DateTime, SmallInteger, Numeric,
+    Enum as SAEnum, ForeignKey, UniqueConstraint, Text
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
@@ -75,6 +75,7 @@ class Group(BaseModel):
     start_date: Mapped[date] = mapped_column(Date, nullable=False)
     end_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     max_students: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=15)
+    teacher_salary_pct: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal("40.00"))
     # schedule: [{"day": "monday", "start": "09:00", "end": "11:00"}, ...]
     schedule: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
 
@@ -84,6 +85,68 @@ class Group(BaseModel):
     teacher: Mapped[Optional["User"]] = relationship(back_populates="groups")
     enrollments: Mapped[List["Enrollment"]] = relationship(back_populates="group")
     lessons: Mapped[List["Lesson"]] = relationship(back_populates="group")
+    materials: Mapped[List["Material"]] = relationship(back_populates="group")
+    tests: Mapped[List["Test"]] = relationship(back_populates="group")
+
+
+class Material(BaseModel):
+    __tablename__ = "materials"
+
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("groups.id"), nullable=False, index=True
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    file_url: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    uploaded_by: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+
+    # Relationships
+    group: Mapped["Group"] = relationship(back_populates="materials")
+    uploader: Mapped["User"] = relationship()
+
+
+class Test(BaseModel):
+    __tablename__ = "tests"
+
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("groups.id"), nullable=False, index=True
+    )
+    teacher_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    )
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    questions: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    max_score: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=100)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    start_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    end_time: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    max_attempts: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
+
+    # Relationships
+    group: Mapped["Group"] = relationship(back_populates="tests")
+    teacher: Mapped["User"] = relationship()
+    results: Mapped[List["TestResult"]] = relationship(back_populates="test", cascade="all, delete-orphan")
+
+
+class TestResult(BaseModel):
+    __tablename__ = "test_results"
+
+    test_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("tests.id"), nullable=False, index=True
+    )
+    student_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("students.id"), nullable=False, index=True
+    )
+    score: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    answers: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    # Relationships
+    test: Mapped["Test"] = relationship(back_populates="results")
+    student: Mapped["Student"] = relationship()
 
 
 class Enrollment(BaseModel):

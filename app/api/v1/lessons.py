@@ -6,6 +6,7 @@ from typing import Annotated, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models.user import User, UserRole
@@ -35,7 +36,7 @@ async def list_lessons(
     current_user: Annotated[User, AnyStaff],
     group_id: Optional[uuid.UUID] = None,
     skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=1000),
 ):
     query = select(Lesson)
     if group_id:
@@ -154,7 +155,11 @@ async def get_homework_submissions(
     if not hw:
         raise HTTPException(status_code=404, detail="Uy vazifasi topilmadi")
     
-    subs = (await db.execute(select(HomeworkSubmission).where(HomeworkSubmission.homework_id == hw_id))).scalars().all()
+    subs = (await db.execute(
+        select(HomeworkSubmission)
+        .options(selectinload(HomeworkSubmission.student))
+        .where(HomeworkSubmission.homework_id == hw_id)
+    )).scalars().all()
     return subs
 
 
@@ -167,14 +172,17 @@ async def list_grades(
     current_user: Annotated[User, AnyStaff],
     student_id: Optional[uuid.UUID] = None,
     lesson_id: Optional[uuid.UUID] = None,
+    group_id: Optional[uuid.UUID] = None,
     skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=1000),
 ):
     query = select(Grade)
     if student_id:
         query = query.where(Grade.student_id == student_id)
     if lesson_id:
         query = query.where(Grade.lesson_id == lesson_id)
+    if group_id:
+        query = query.join(Lesson).where(Lesson.group_id == group_id)
 
     total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
     grades = (await db.execute(query.offset(skip).limit(limit))).scalars().all()
@@ -201,6 +209,9 @@ async def update_grade(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, TeacherOrAbove],
 ):
+    if current_user.role == UserRole.TEACHER:
+        raise HTTPException(status_code=403, detail="O'qituvchi qo'yilgan bahoni o'zgartira olmaydi")
+
     grade = (await db.execute(select(Grade).where(Grade.id == grade_id))).scalar_one_or_none()
     if not grade:
         raise HTTPException(status_code=404, detail="Baho topilmadi")

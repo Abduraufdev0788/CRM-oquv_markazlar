@@ -1,10 +1,10 @@
 import uuid
 import enum
-from datetime import date, time
+from datetime import date, time, datetime
 from decimal import Decimal
 from typing import Optional, List, TYPE_CHECKING
 from sqlalchemy import (
-    String, Boolean, Date, Time, SmallInteger,
+    String, Boolean, Date, Time, SmallInteger, DateTime,
     Numeric, Text, Enum as SAEnum, ForeignKey, CheckConstraint
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -47,7 +47,7 @@ class Homework(BaseModel):
     )
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    due_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    due_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     max_score: Mapped[Decimal] = mapped_column(Numeric(5, 2), nullable=False, default=Decimal("100.00"))
     file_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
 

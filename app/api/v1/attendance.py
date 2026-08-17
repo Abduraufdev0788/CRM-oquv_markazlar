@@ -19,6 +19,7 @@ from app.schemas import (
     AttendanceBulkCreate, StudentAttendanceSummary,
     PaginatedResponse, MessageResponse,
 )
+from app.services.notification_service import send_attendance_notification
 
 router = APIRouter(prefix="/attendance", tags=["Attendance (Davomat)"])
 
@@ -80,6 +81,13 @@ async def create_attendance(
     )
     db.add(attendance)
     await db.flush()
+    try:
+        status_val = attendance.status.value if hasattr(attendance.status, 'value') else str(attendance.status)
+        await send_attendance_notification(db, str(attendance.student_id), status_val, str(attendance.lesson_id))
+    except Exception as e:
+        import logging
+        logging.error(f"Xabar yuborishda xatolik: {e}")
+    await db.commit()
     await db.refresh(attendance)
     return attendance
 
@@ -96,6 +104,8 @@ async def bulk_create_attendance(
     current_user: Annotated[User, AnyStaff],
 ):
     results = []
+    changed_records = []
+    
     for record in data.records:
         existing = (await db.execute(
             select(Attendance).where(
@@ -103,13 +113,20 @@ async def bulk_create_attendance(
             )
         )).scalar_one_or_none()
         if existing:
+            # Holati o'zgarganligini tekshirish
+            status_changed = existing.status != record.status
+            
             # Mavjud bo'lsa — yangilash
-            for key, value in record.model_dump(exclude_unset=True).items():
-                if key != "lesson_id":
-                    setattr(existing, key, value)
+            existing.status = record.status
+            existing.check_in_time = record.check_in_time
+            existing.late_minutes = record.late_minutes
+            existing.note = record.note
             existing.is_manual = True
             existing.manual_by = current_user.id
             results.append(existing)
+            
+            if status_changed:
+                changed_records.append(existing)
         else:
             att = Attendance(
                 student_id=record.student_id,
@@ -123,8 +140,21 @@ async def bulk_create_attendance(
             )
             db.add(att)
             results.append(att)
+            changed_records.append(att)
 
     await db.flush()
+    
+    # Har bir o'quvchi uchun faqat o'zgargan bo'lsa Notification yozish
+    for att in changed_records:
+        try:
+            status_val = att.status.value if hasattr(att.status, 'value') else str(att.status)
+            await send_attendance_notification(db, str(att.student_id), status_val, str(att.lesson_id))
+        except Exception as e:
+            import logging
+            logging.error(f"Xabar yuborishda xatolik: {e}")
+        
+    await db.commit()  # Explicitly commit to guarantee persistence
+    
     for att in results:
         await db.refresh(att)
     return results
@@ -141,12 +171,24 @@ async def update_attendance(
     if not att:
         raise HTTPException(status_code=404, detail="Davomat yozuvi topilmadi")
 
+    old_status = att.status
+
     for key, value in data.model_dump(exclude_unset=True).items():
         setattr(att, key, value)
     att.is_manual = True
     att.manual_by = current_user.id
 
+    status_changed = old_status != att.status
+
     await db.flush()
+    if status_changed:
+        try:
+            status_val = att.status.value if hasattr(att.status, 'value') else str(att.status)
+            await send_attendance_notification(db, str(att.student_id), status_val, str(att.lesson_id))
+        except Exception as e:
+            import logging
+            logging.error(f"Xabar yuborishda xatolik: {e}")
+    await db.commit()
     await db.refresh(att)
     return att
 
@@ -190,3 +232,17 @@ async def student_attendance_summary(
         excused_count=counts[AttendanceStatus.EXCUSED],
         attendance_rate=rate,
     )
+
+@router.get("/group/{group_id}", summary="Guruhning barcha davomatini olish (Matrix uchun)")
+async def group_attendance_matrix(
+    group_id: uuid.UUID,
+    db: Annotated[AsyncSession, Depends(get_db)],
+    current_user: Annotated[User, AnyStaff],
+):
+    query = (
+        select(Attendance)
+        .join(Lesson, Attendance.lesson_id == Lesson.id)
+        .where(Lesson.group_id == group_id)
+    )
+    records = (await db.execute(query)).scalars().all()
+    return {"data": [{"id": r.id, "student_id": r.student_id, "lesson_id": r.lesson_id, "status": r.status.value} for r in records]}

@@ -163,15 +163,17 @@ async def debtors_report(
     current_user: Annotated[User, ManagerOrAdmin],
     month: int = Query(..., ge=1, le=12),
     year: int = Query(..., ge=2020),
+    group_id: Optional[uuid.UUID] = Query(None, description="Filtrlash uchun guruh ID si"),
 ):
     """
     Berilgan oy uchun to'lov qilmagan aktiv o'quvchilar.
     """
     from app.models.student import Student
+    from sqlalchemy.orm import selectinload
 
-    # To'lov qilgan o'quvchilar
-    paid_subq = (
-        select(Payment.student_id)
+    # 1. Shu oy uchun qilingan barcha to'lovlarni guruhlab olamiz
+    payments_result = await db.execute(
+        select(Payment.student_id, func.sum(Payment.amount).label("total_paid"))
         .where(
             and_(
                 Payment.period_month == month,
@@ -179,32 +181,68 @@ async def debtors_report(
                 Payment.status == PaymentStatus.CONFIRMED,
             )
         )
-        .scalar_subquery()
+        .group_by(Payment.student_id)
+    )
+    paid_amounts = {row.student_id: row.total_paid for row in payments_result}
+
+    # 2. Barcha aktiv o'quvchilarni kurslari bilan tortib olamiz
+    student_query = (
+        select(Student)
+        .options(
+            selectinload(Student.enrollments).selectinload(Enrollment.group).selectinload(Group.course)
+        )
     )
 
-    # Aktiv o'quvchilar ichidan to'lov qilmaganlar
-    debtors = (await db.execute(
-        select(Student).where(
-            and_(
-                Student.id.not_in(paid_subq),
-                # Kamida bitta aktiv enrollmenti bor
-                Student.id.in_(
-                    select(Enrollment.student_id).where(Enrollment.status == EnrollmentStatus.ACTIVE)
-                ),
+    if group_id:
+        student_query = student_query.where(
+            Student.id.in_(
+                select(Enrollment.student_id).where(
+                    and_(
+                        Enrollment.status == EnrollmentStatus.ACTIVE,
+                        Enrollment.group_id == group_id
+                    )
+                )
             )
         )
-    )).scalars().all()
+    else:
+        student_query = student_query.where(
+            Student.id.in_(
+                select(Enrollment.student_id).where(Enrollment.status == EnrollmentStatus.ACTIVE)
+            )
+        )
 
-    return {
-        "period": f"{year}-{month:02d}",
-        "count": len(debtors),
-        "debtors": [
-            {
+    students = (await db.execute(student_query)).scalars().all()
+
+    debtors_list = []
+    for s in students:
+        total_required = Decimal("0.00")
+        groups_list = []
+        
+        for enr in s.enrollments:
+            if enr.status == EnrollmentStatus.ACTIVE and enr.group and enr.group.course:
+                course_fee = enr.group.course.monthly_fee
+                discount = enr.discount_pct
+                required = course_fee * (Decimal("1") - discount / Decimal("100"))
+                total_required += required
+                groups_list.append(enr.group.name)
+                
+        total_paid = paid_amounts.get(s.id, Decimal("0.00"))
+        debt = total_required - total_paid
+        
+        if debt > 0:
+            debtors_list.append({
                 "id": str(s.id),
                 "full_name": s.full_name,
                 "phone": s.phone,
-                "balance": float(s.balance),
-            }
-            for s in debtors
-        ],
+                "balance": float(debt),  # Hozirgi oy uchun aniq qarz
+                "groups": groups_list
+            })
+
+    # Qarzi eng ko'plarni birinchi chiqarish (Saralash)
+    debtors_list.sort(key=lambda x: x["balance"], reverse=True)
+
+    return {
+        "period": f"{year}-{month:02d}",
+        "count": len(debtors_list),
+        "debtors": debtors_list,
     }

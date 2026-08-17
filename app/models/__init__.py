@@ -7,6 +7,7 @@ from app.models.lesson import Lesson, Homework, HomeworkSubmission, Grade, Grade
 from app.models.finance import Payment, Expense, Salary, PaymentMethod, PaymentStatus, ExpenseCategory, SalaryStatus
 from app.models.iot import FaceDevice, FaceLog, Attendance, DeviceStatus, AttendanceStatus
 from app.models.system import Notification, AuditLog, NotificationChannel, NotificationStatus, NotificationType, AuditAction
+from app.models.lead import Lead, LeadStatus
 
 __all__ = [
     "BaseModel",
@@ -17,4 +18,5 @@ __all__ = [
     "Payment", "Expense", "Salary", "PaymentMethod", "PaymentStatus", "ExpenseCategory", "SalaryStatus",
     "FaceDevice", "FaceLog", "Attendance", "DeviceStatus", "AttendanceStatus",
     "Notification", "AuditLog", "NotificationChannel", "NotificationStatus", "NotificationType", "AuditAction",
+    "Lead", "LeadStatus",
 ]

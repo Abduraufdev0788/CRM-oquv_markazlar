@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from contextlib import asynccontextmanager
 
 from app.config import settings
@@ -13,6 +14,12 @@ async def lifespan(app: FastAPI):
     # Startup: jadvallarni yaratish (dev uchun, prod da alembic ishlatiladi)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        from sqlalchemy import text
+        try:
+            await conn.execute(text("ALTER TABLE groups ADD COLUMN teacher_salary_pct NUMERIC(5,2) NOT NULL DEFAULT 40.00"))
+            print("Successfully added teacher_salary_pct to groups")
+        except Exception:
+            pass # Already exists
     yield
     # Shutdown: engine ni yopish
     await engine.dispose()
@@ -38,6 +45,11 @@ app.add_middleware(
 
 # ── Routers ────────────────────────────────────────────────────────────────────
 app.include_router(api_router)
+
+# ── Static Files ───────────────────────────────────────────────────────────────
+import os
+os.makedirs("uploads", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 
 @app.get("/", tags=["Health"])

@@ -50,6 +50,8 @@ class PaymentResponse(BaseResponse):
     created_by: Optional[uuid.UUID]
 
 
+from app.schemas.student import StudentBriefResponse
+
 class PaymentBriefResponse(BaseSchema):
     id: uuid.UUID
     amount: Decimal
@@ -57,6 +59,11 @@ class PaymentBriefResponse(BaseSchema):
     status: PaymentStatus
     period_month: int
     period_year: int
+    created_at: datetime
+    student_id: uuid.UUID
+    enrollment_id: Optional[uuid.UUID] = None
+    group_name: Optional[str] = None
+    student: Optional[StudentBriefResponse] = None
 
 
 class MonthlyPaymentSummary(BaseSchema):
@@ -143,6 +150,8 @@ class SalaryPayRequest(BaseSchema):
     comment: Optional[str] = None
 
 
+from app.schemas.user import UserBriefResponse
+
 class SalaryResponse(BaseResponse):
     user_id: uuid.UUID
     period_month: int
@@ -154,6 +163,7 @@ class SalaryResponse(BaseResponse):
     paid_at: Optional[datetime]
     paid_by: Optional[uuid.UUID]
     comment: Optional[str]
+    user: Optional[UserBriefResponse] = None
 
     @property
     def total_amount(self) -> Decimal:

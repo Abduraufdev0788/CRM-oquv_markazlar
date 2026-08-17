@@ -3,7 +3,7 @@ Academic schemas — Course, Room, Group, Enrollment.
 """
 import uuid
 import re
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional, List, Any
 from pydantic import field_validator, model_validator, Field
@@ -89,11 +89,12 @@ class RoomResponse(BaseResponse):
     floor: Optional[int]
     has_projector: bool
     is_active: bool
+    current_occupancy: Optional[dict] = None
 
 
 # ── Group Schedule Item ────────────────────────────────────────────────────────
 DAYS_UZ = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
-TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+TIME_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$")
 
 
 class ScheduleItem(BaseSchema):
@@ -132,6 +133,7 @@ class GroupCreate(BaseSchema):
     start_date: date
     end_date: Optional[date] = None
     max_students: int = Field(default=15, ge=1, le=100)
+    teacher_salary_pct: int = Field(default=40, ge=0, le=100)
     schedule: List[ScheduleItem] = Field(..., min_length=1, max_length=7)
 
     @field_validator("end_date")
@@ -160,6 +162,7 @@ class GroupUpdate(BaseSchema):
     start_date: Optional[date] = None
     end_date: Optional[date] = None
     max_students: Optional[int] = Field(None, ge=1, le=100)
+    teacher_salary_pct: Optional[int] = Field(None, ge=0, le=100)
     schedule: Optional[List[ScheduleItem]] = None
 
 
@@ -172,10 +175,12 @@ class GroupResponse(BaseResponse):
     start_date: date
     end_date: Optional[date]
     max_students: int
+    teacher_salary_pct: int
     schedule: List[dict]
     # Nested
     teacher: Optional[UserBriefResponse] = None
     course: Optional[CourseBriefResponse] = None
+    room: Optional[RoomResponse] = None
     enrolled_count: Optional[int] = None  # DB query dan qo'shiladi
 
 
@@ -186,10 +191,90 @@ class GroupBriefResponse(BaseSchema):
     start_date: date
     end_date: Optional[date] = None
     max_students: int
+    teacher_salary_pct: int
     schedule: List[dict] = Field(default_factory=list)
     room_id: Optional[uuid.UUID] = None
     room: Optional[RoomResponse] = None
     course: Optional[CourseBriefResponse] = None
+
+
+# ── Material Schemas ───────────────────────────────────────────────────────────
+class MaterialCreate(BaseSchema):
+    group_id: uuid.UUID
+    title: str
+    description: Optional[str] = None
+    file_url: str
+    file_type: Optional[str] = None
+
+class MaterialResponse(BaseResponse):
+    group_id: uuid.UUID
+    title: str
+    description: Optional[str] = None
+    file_url: str
+    file_type: Optional[str] = None
+    uploaded_by: uuid.UUID
+    uploader: Optional[UserBriefResponse] = None
+    group: Optional[GroupBriefResponse] = None
+
+
+# ── Test Schemas ───────────────────────────────────────────────────────────────
+class QuestionSchema(BaseSchema):
+    text: str
+    type: str = "choice" # e.g. "choice", "text"
+    options: Optional[List[str]] = None
+    correct_answer: Optional[int] = None # index of correct option if choice
+
+class TestCreate(BaseSchema):
+    group_id: uuid.UUID
+    title: str
+    description: Optional[str] = None
+    questions: List[QuestionSchema]
+    max_score: int = 100
+    is_active: bool = True
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    max_attempts: int = 1
+
+class TestUpdate(BaseSchema):
+    title: Optional[str] = None
+    description: Optional[str] = None
+    questions: Optional[List[QuestionSchema]] = None
+    max_score: Optional[int] = None
+    is_active: Optional[bool] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    max_attempts: Optional[int] = None
+
+class TestResponse(BaseResponse):
+    group_id: uuid.UUID
+    teacher_id: uuid.UUID
+    title: str
+    description: Optional[str] = None
+    questions: List[QuestionSchema] = Field(default_factory=list)
+    max_score: int
+    is_active: bool
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    max_attempts: int
+    attempts_used: Optional[int] = None
+    teacher: Optional[UserBriefResponse] = None
+    group: Optional[GroupBriefResponse] = None
+
+class TestSubmit(BaseSchema):
+    answers: dict[str, int] # e.g., {"0": 1, "1": 3} where key is question index, value is selected option index
+
+class TestResultCreate(BaseSchema):
+    test_id: uuid.UUID
+    student_id: uuid.UUID
+    score: int
+    answers: dict
+
+class TestResultResponse(BaseResponse):
+    test_id: uuid.UUID
+    student_id: uuid.UUID
+    score: int
+    answers: dict
+    student: Optional[StudentBriefResponse] = None
 
 
 # ── Enrollment Schemas ─────────────────────────────────────────────────────────

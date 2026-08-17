@@ -39,15 +39,14 @@ async def create_notification(
     return notif
 
 
-async def send_attendance_notification(db: AsyncSession, student_id: str, status: str) -> None:
+async def send_attendance_notification(db: AsyncSession, student_id: str, status: str, lesson_id: str = None) -> None:
     """
     O'quvchi davomati haqida ota-onaga xabarnoma yuboradi.
-    1. O'quvchi → Parent → telegram_id topiladi
-    2. Notification yaratiladi
-    3. Celery task orqali yuboriladi
     """
     import uuid
-    from app.tasks.notification_tasks import send_telegram_notification
+    import httpx
+    from app.models.system import NotificationStatus
+    from datetime import datetime, timezone
 
     student = (await db.execute(
         select(Student).where(Student.id == uuid.UUID(student_id))
@@ -64,6 +63,21 @@ async def send_attendance_notification(db: AsyncSession, student_id: str, status
     if not parent:
         return
 
+    lesson_info = ""
+    if lesson_id:
+        from app.models.lesson import Lesson
+        from sqlalchemy.orm import selectinload
+        lesson = (await db.execute(
+            select(Lesson).options(selectinload(Lesson.group)).where(Lesson.id == uuid.UUID(lesson_id))
+        )).scalar_one_or_none()
+        
+        if lesson:
+            date_str = lesson.lesson_date.strftime("%d.%m.%Y")
+            start_str = lesson.start_time.strftime("%H:%M")
+            end_str = lesson.end_time.strftime("%H:%M")
+            group_name = lesson.group.name if lesson.group else "Noma'lum guruh"
+            lesson_info = f"📚 Guruh: {group_name}\n📅 Sana: {date_str}\n⏰ Vaqt: {start_str} - {end_str}\n\n"
+
     status_text = {
         "present": "✅ Darsga keldi",
         "late": "⚠️ Kechikib keldi",
@@ -72,7 +86,7 @@ async def send_attendance_notification(db: AsyncSession, student_id: str, status
     }.get(status, status)
 
     title = f"Davomat: {student.full_name}"
-    body = f"{student.full_name} — {status_text}"
+    body = f"👦 O'quvchi: {student.full_name}\n\n{lesson_info}Holati: {status_text}"
 
     channel = NotificationChannel.TELEGRAM if parent.telegram_id else NotificationChannel.SMS
     notif = await create_notification(
@@ -86,9 +100,26 @@ async def send_attendance_notification(db: AsyncSession, student_id: str, status
     )
     await db.flush()
 
-    # Celery orqali asinxron yuborish
-    send_telegram_notification.delay(str(notif.id))
-    logger.info(f"Notification Celery ga yuborildi: {notif.id}")
+    await db.flush()
+
+    # Celery yoqilmagan bo'lishi mumkinligi uchun to'g'ridan to'g'ri Telegram API ga yuboramiz
+    if channel == NotificationChannel.TELEGRAM and parent.telegram_id:
+        try:
+            text = f"*{title}*\n\n{body}"
+            url = f"https://api.telegram.org/bot{settings.TELEGRAM_BOT_TOKEN}/sendMessage"
+            async with httpx.AsyncClient() as client:
+                resp = await client.post(url, json={
+                    "chat_id": parent.telegram_id,
+                    "text": text,
+                    "parse_mode": "Markdown",
+                }, timeout=10.0)
+                if resp.status_code == 200:
+                    notif.status = NotificationStatus.SENT
+                    notif.sent_at = datetime.now(timezone.utc)
+                    notif.external_id = str(resp.json()["result"]["message_id"])
+                    logger.info(f"Telegram orqali ota-onaga xabar ketdi: {parent.telegram_id}")
+        except Exception as e:
+            logger.error(f"Xabar yuborishda xato: {e}")
 
 
 async def send_payment_due_notification(db: AsyncSession, student_id: str, amount: float) -> None:

@@ -128,6 +128,7 @@ async def process_face_log_to_attendance(db: AsyncSession, face_log_id: str) -> 
     return {
         "status": "success",
         "student_id": str(student.id),
+        "lesson_id": str(lesson.id),
         "attendance_status": att_status,
         "late_minutes": late_minutes,
     }

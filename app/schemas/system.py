@@ -18,10 +18,19 @@ class NotificationCreate(BaseSchema):
     """Yangi xabarnoma yaratish (odatda service tomonidan chaqiriladi)."""
     parent_id: Optional[uuid.UUID] = None
     student_id: Optional[uuid.UUID] = None
+    user_id: Optional[uuid.UUID] = None
     channel: NotificationChannel
     notif_type: NotificationType
     title: str = Field(..., max_length=200)
     body: str = Field(..., min_length=1)
+
+class NotificationSendRequest(BaseSchema):
+    """Admin tomonidan yuboriladigan xabarnoma uchun request schema"""
+    title: str = Field(..., max_length=200)
+    body: str = Field(..., min_length=1)
+    target: str = Field(..., description="Qaysi toifaga: 'all', 'students', 'teachers', 'parents', 'group'")
+    group_id: Optional[uuid.UUID] = None
+    channel: NotificationChannel = NotificationChannel.IN_APP
 
 
 class NotificationResponse(BaseResponse):

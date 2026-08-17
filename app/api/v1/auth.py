@@ -85,18 +85,27 @@ async def student_login(
             detail="Telefon raqam xato",
         )
 
-    # Parol mantiqini tekshirish (Tug'ilgan sana)
-    valid_passwords = ["123456"] # Agar tug'ilgan sana kiritilmagan bo'lsa
-    if student.birth_date:
-        valid_passwords.append(student.birth_date.strftime("%Y-%m-%d"))
-        valid_passwords.append(student.birth_date.strftime("%d%m%Y"))
-        valid_passwords.append(student.birth_date.strftime("%d.%m.%Y"))
+    # Parol mantiqini tekshirish
+    if student.password_hash:
+        # Agar yangi parol o'rnatilgan bo'lsa
+        if not verify_password(form_data.password, student.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Parol noto'g'ri",
+            )
+    else:
+        # Eski usul (Tug'ilgan sana) bilan tekshirish
+        valid_passwords = ["123456"]
+        if student.birth_date:
+            valid_passwords.append(student.birth_date.strftime("%Y-%m-%d"))
+            valid_passwords.append(student.birth_date.strftime("%d%m%Y"))
+            valid_passwords.append(student.birth_date.strftime("%d.%m.%Y"))
 
-    if form_data.password not in valid_passwords:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Parol (Tug'ilgan sana) noto'g'ri. Masalan: 2005-10-15 yoki 15102005",
-        )
+        if form_data.password not in valid_passwords:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Parol (Tug'ilgan sana) noto'g'ri. Masalan: 2005-10-15 yoki 15102005",
+            )
 
     # JWT token yaratamiz, role="student" qilib belgilaymiz
     access_token = create_access_token(data={"sub": str(student.id), "role": "student"})
@@ -175,4 +184,46 @@ async def get_me(current_user: Annotated[User, Depends(get_current_active_user)]
         "phone": current_user.phone,
         "role": current_user.role,
         "is_active": current_user.is_active,
+        "photo_url": current_user.photo_url,
     }
+
+
+from pydantic import BaseModel
+from typing import Optional
+
+class ProfileUpdate(BaseModel):
+    full_name: Optional[str] = None
+    photo_url: Optional[str] = None
+
+class PasswordUpdate(BaseModel):
+    old_password: str
+    new_password: str
+
+@router.put("/me/profile", summary="Profilni tahrirlash")
+async def update_profile(
+    data: ProfileUpdate,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)]
+):
+    if data.full_name is not None:
+        current_user.full_name = data.full_name
+    if data.photo_url is not None:
+        current_user.photo_url = data.photo_url
+        
+    await db.commit()
+    return {"detail": "Profil muvaffaqiyatli yangilandi"}
+
+@router.put("/me/password", summary="Parolni o'zgartirish")
+async def update_password(
+    data: PasswordUpdate,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)]
+):
+    if not verify_password(data.old_password, current_user.password_hash):
+        raise HTTPException(status_code=400, detail="Eski parol noto'g'ri")
+        
+    from app.core.security import get_password_hash
+    current_user.password_hash = get_password_hash(data.new_password)
+    await db.commit()
+    
+    return {"detail": "Parol muvaffaqiyatli o'zgartirildi"}

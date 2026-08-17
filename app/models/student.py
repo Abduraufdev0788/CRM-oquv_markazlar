@@ -45,6 +45,7 @@ class Student(BaseModel):
     phone: Mapped[Optional[str]] = mapped_column(String(20), unique=True, nullable=True)
     birth_date: Mapped[Optional[Date]] = mapped_column(Date, nullable=True)
     photo_url: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
+    password_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     parent_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("parents.id", ondelete="SET NULL"), nullable=True, index=True
     )

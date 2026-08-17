@@ -93,3 +93,36 @@ async def get_current_student(
     if student is None:
         raise credentials_exception
     return student
+
+
+async def get_current_user_or_student(
+    credentials: Annotated[HTTPAuthorizationCredentials, Depends(bearer_scheme)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """JWT tokendan joriy foydalanuvchi yoki o'quvchini olish."""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Token noto'g'ri yoki muddati o'tgan",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    payload = decode_access_token(credentials.credentials)
+    if payload is None:
+        raise credentials_exception
+
+    user_id: str = payload.get("sub")
+    role: str = payload.get("role")
+    
+    if user_id is None:
+        raise credentials_exception
+
+    if role == "student":
+        result = await db.execute(select(Student).where(Student.id == user_id, Student.status == StudentStatus.ACTIVE))
+        user = result.scalar_one_or_none()
+    else:
+        result = await db.execute(select(User).where(User.id == user_id, User.is_active == True))
+        user = result.scalar_one_or_none()
+        
+    if user is None:
+        raise credentials_exception
+        
+    return user

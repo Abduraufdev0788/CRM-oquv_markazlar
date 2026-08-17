@@ -2,7 +2,7 @@ import uuid
 import enum
 from datetime import datetime
 from typing import Optional, TYPE_CHECKING
-from sqlalchemy import String, Text, Enum as SAEnum, ForeignKey, DateTime
+from sqlalchemy import String, Text, Enum as SAEnum, ForeignKey, DateTime, Boolean
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 from app.models.base import BaseModel
@@ -16,6 +16,7 @@ class NotificationChannel(str, enum.Enum):
     TELEGRAM = "telegram"
     SMS = "sms"
     EMAIL = "email"
+    IN_APP = "in_app"
 
 
 class NotificationStatus(str, enum.Enum):
@@ -30,6 +31,7 @@ class NotificationType(str, enum.Enum):
     PAYMENT_RECEIVED = "payment_received"
     GRADE = "grade"
     GENERAL = "general"
+    SYSTEM_ALERT = "system_alert"
 
 
 class AuditAction(str, enum.Enum):
@@ -43,6 +45,9 @@ class AuditAction(str, enum.Enum):
 class Notification(BaseModel):
     __tablename__ = "notifications"
 
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id"), nullable=True, index=True
+    )
     parent_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         PG_UUID(as_uuid=True), ForeignKey("parents.id"), nullable=True, index=True
     )
@@ -60,6 +65,9 @@ class Notification(BaseModel):
     status: Mapped[NotificationStatus] = mapped_column(
         SAEnum(NotificationStatus, name="notificationstatus"),
         nullable=False, default=NotificationStatus.PENDING, index=True
+    )
+    is_read: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
     )
     sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

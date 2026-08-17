@@ -38,7 +38,7 @@ async def list_users(
     is_active: Optional[bool] = Query(None),
     search: Optional[str] = Query(None, description="Ism yoki telefon"),
     skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=10000),
 ):
     query = select(User)
     if role:

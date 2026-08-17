@@ -38,6 +38,9 @@ class Settings(BaseSettings):
 
     # ── CORS ───────────────────────────────────────────────────────────────────
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://localhost:5173"
+    
+    # ── AI ─────────────────────────────────────────────────────────────────────
+    GEMINI_API_KEY: str = ""
 
     @property
     def cors_origins(self) -> List[str]:

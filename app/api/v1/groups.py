@@ -35,7 +35,7 @@ async def list_courses(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, AnyStaff],
     is_active: Optional[bool] = Query(None),
-    skip: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200),
+    skip: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=10000),
 ):
     query = select(Course)
     if is_active is not None:
@@ -80,14 +80,91 @@ async def list_rooms(
     db: Annotated[AsyncSession, Depends(get_db)],
     current_user: Annotated[User, AnyStaff],
     is_active: Optional[bool] = Query(None),
-    skip: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200),
+    available_now: Optional[bool] = Query(False, description="Faqat hozirgi vaqtda bo'sh bo'lgan xonalarni qaytarish"),
+    skip: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=10000),
 ):
     query = select(Room)
     if is_active is not None:
         query = query.where(Room.is_active == is_active)
+        
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo('Asia/Tashkent')
+    now = datetime.now(tz)
+    current_day = now.strftime("%A").lower()
+    current_time = now.strftime("%H:%M")
+    
+    # Barcha arxivlanmagan guruhlarni olamiz (ularning xonasi bo'lsa)
+    active_groups = (await db.execute(
+        select(Group).options(selectinload(Group.teacher)).where(Group.status != GroupStatus.ARCHIVED, Group.room_id.is_not(None))
+    )).scalars().all()
+    
+    occupied_room_ids = []
+    occupied_data = {}
+    for g in active_groups:
+        if not isinstance(g.schedule, list):
+            continue
+        for s in g.schedule:
+            if s.get("day") == current_day:
+                start_time = s.get("start", "")[:5]
+                end_time = s.get("end", "")[:5]
+                if start_time and end_time and start_time <= current_time <= end_time:
+                    occupied_room_ids.append(g.room_id)
+                    occupied_data[g.room_id] = {
+                        "group_name": g.name,
+                        "teacher_name": g.teacher.full_name if getattr(g, "teacher", None) else "Biriktirilmagan",
+                        "start_time": start_time,
+                        "end_time": end_time
+                    }
+                    break
+                    
+    if available_now and occupied_room_ids:
+        query = query.where(Room.id.not_in(occupied_room_ids))
+
     total = (await db.execute(select(func.count()).select_from(query.subquery()))).scalar_one()
     rooms = (await db.execute(query.offset(skip).limit(limit))).scalars().all()
+    
+    for r in rooms:
+        if r.id in occupied_data:
+            setattr(r, "current_occupancy", occupied_data[r.id])
+            
     return PaginatedResponse.create(data=rooms, total=total, skip=skip, limit=limit)
+
+@router.get("/rooms/debug-time", summary="Debug time and occupancy")
+async def debug_rooms_time(db: Annotated[AsyncSession, Depends(get_db)]):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo('Asia/Tashkent')
+    now = datetime.now(tz)
+    current_day = now.strftime("%A").lower()
+    current_time = now.strftime("%H:%M")
+    
+    active_groups = (await db.execute(
+        select(Group).where(Group.status != GroupStatus.ARCHIVED, Group.room_id.is_not(None))
+    )).scalars().all()
+    
+    debug_info = []
+    occupied_ids = []
+    
+    for g in active_groups:
+        info = {"group_id": str(g.id), "room_id": str(g.room_id), "schedule": g.schedule, "type": str(type(g.schedule))}
+        if isinstance(g.schedule, list):
+            for s in g.schedule:
+                if s.get("day") == current_day:
+                    start_time = s.get("start", "")[:5]
+                    end_time = s.get("end", "")[:5]
+                    info["match"] = f"{start_time} <= {current_time} <= {end_time}"
+                    if start_time and end_time and start_time <= current_time <= end_time:
+                        occupied_ids.append(str(g.room_id))
+                        info["occupied"] = True
+        debug_info.append(info)
+        
+    return {
+        "current_day": current_day,
+        "current_time": current_time,
+        "occupied_ids": occupied_ids,
+        "debug_info": debug_info
+    }
 
 
 @router.post("/rooms/", response_model=RoomResponse, status_code=201, summary="Yangi xona")
@@ -165,7 +242,7 @@ async def list_groups(
     group_status: Optional[GroupStatus] = Query(None, alias="status"),
     course_id: Optional[uuid.UUID] = Query(None),
     teacher_id: Optional[uuid.UUID] = Query(None),
-    skip: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100),
+    skip: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=10000),
 ):
     await _auto_activate_groups(db)
 
@@ -303,6 +380,38 @@ async def check_teacher_availability(db: AsyncSession, teacher_id: uuid.UUID, sc
                         )
 
 
+async def check_student_availability(db: AsyncSession, student_id: uuid.UUID, schedule: list):
+    if not student_id or not schedule:
+        return
+        
+    query = select(Group).join(Enrollment).where(
+        Enrollment.student_id == student_id,
+        Enrollment.status == EnrollmentStatus.ACTIVE,
+        Group.status.in_([GroupStatus.ACTIVE, GroupStatus.PLANNED])
+    )
+    
+    existing_groups = (await db.execute(query)).scalars().all()
+    
+    for new_sch in schedule:
+        new_day = new_sch.day if hasattr(new_sch, 'day') else new_sch.get("day")
+        new_start = new_sch.start if hasattr(new_sch, 'start') else new_sch.get("start")
+        new_end = new_sch.end if hasattr(new_sch, 'end') else new_sch.get("end")
+        
+        for eg in existing_groups:
+            if not eg.schedule:
+                continue
+            for eg_sch in eg.schedule:
+                if eg_sch.get("day") == new_day:
+                    eg_start = eg_sch.get("start")
+                    eg_end = eg_sch.get("end")
+                    if new_start and new_end and eg_start and eg_end:
+                        if new_start < eg_end and eg_start < new_end:
+                            raise HTTPException(
+                                status_code=400, 
+                                detail=f"O'quvchining bu vaqtda boshqa darsi bor (Guruh: {eg.name}, Kun: {new_day}, Vaqt: {eg_start}-{eg_end})"
+                            )
+
+
 @router.post("/groups/", response_model=GroupResponse, status_code=201, summary="Yangi guruh")
 async def create_group(
     data: GroupCreate,
@@ -422,6 +531,10 @@ async def enroll_student(
     if existing:
         if existing.status == EnrollmentStatus.ACTIVE:
             raise HTTPException(status_code=409, detail="O'quvchi bu guruhda allaqachon faol")
+            
+        if group.schedule:
+            await check_student_availability(db, data.student_id, group.schedule)
+            
         existing.status = EnrollmentStatus.ACTIVE
         existing.dropped_at = None
         await db.commit()
@@ -431,6 +544,10 @@ async def enroll_student(
             .where(Enrollment.id == existing.id)
         )).scalar_one()
         return existing
+        
+    if group.schedule:
+        await check_student_availability(db, data.student_id, group.schedule)
+        
     enrollment = Enrollment(
         student_id=data.student_id, group_id=group_id,
         discount_pct=data.discount_pct, notes=data.notes, enrolled_at=date.today(),

@@ -76,6 +76,12 @@ class Payment(BaseModel):
     student: Mapped["Student"] = relationship(back_populates="payments")
     enrollment: Mapped[Optional["Enrollment"]] = relationship(back_populates="payments")
 
+    @property
+    def group_name(self) -> Optional[str]:
+        if self.enrollment and self.enrollment.group:
+            return self.enrollment.group.name
+        return None
+
 
 class Expense(BaseModel):
     __tablename__ = "expenses"

@@ -87,6 +87,31 @@ services:
       - redis
     restart: unless-stopped
 
+  # ── Telegram Bot ───────────────────────────────────────────────────────────
+  bot:
+    build: .
+    container_name: educrm_bot
+    command: python run_bot.py
+    volumes:
+      - .:/app
+    env_file:
+      - .env
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
+
+  # ── Frontend (React/Nginx) ─────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ../CRM-oquv_markazlar_frontend
+    container_name: educrm_frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:

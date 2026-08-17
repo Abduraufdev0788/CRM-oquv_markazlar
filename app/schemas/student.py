@@ -72,12 +72,14 @@ class StudentCreate(BaseSchema):
     birth_date: Optional[date] = Field(None, examples=["2008-05-15"])
     photo_url: Optional[str] = Field(None, max_length=255)
     parent_id: Optional[uuid.UUID] = None
+    parent_name: Optional[str] = Field(None, max_length=100, description="Ota-ona ismi")
+    parent_phone: Optional[str] = Field(None, examples=["+998901234567"], description="Ota-ona telefon raqami")
     face_data_id: Optional[str] = Field(
         None, max_length=100, description="Face ID qurilmadan olingan shaxs ID"
     )
     notes: Optional[str] = None
 
-    @field_validator("phone")
+    @field_validator("phone", "parent_phone")
     @classmethod
     def phone_format(cls, v: Optional[str]) -> Optional[str]:
         return validate_phone_optional(v)
@@ -96,11 +98,13 @@ class StudentUpdate(BaseSchema):
     birth_date: Optional[date] = None
     photo_url: Optional[str] = Field(None, max_length=255)
     parent_id: Optional[uuid.UUID] = None
+    parent_name: Optional[str] = Field(None, max_length=100)
+    parent_phone: Optional[str] = None
     status: Optional[StudentStatus] = None
     face_data_id: Optional[str] = Field(None, max_length=100)
     notes: Optional[str] = None
 
-    @field_validator("phone")
+    @field_validator("phone", "parent_phone")
     @classmethod
     def phone_format(cls, v: Optional[str]) -> Optional[str]:
         return validate_phone_optional(v)
@@ -126,6 +130,7 @@ class StudentBriefResponse(BaseSchema):
     id: uuid.UUID
     full_name: str
     phone: Optional[str]
+    birth_date: Optional[date] = None
     status: StudentStatus
     balance: Decimal
 

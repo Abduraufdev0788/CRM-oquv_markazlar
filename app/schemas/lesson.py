@@ -2,12 +2,13 @@
 Lesson, Homework, Grade schemas.
 """
 import uuid
-from datetime import date, time
+from datetime import date, time, datetime, timezone
 from decimal import Decimal
 from typing import Optional, List
 from pydantic import field_validator, model_validator, Field
 
 from app.schemas.base import BaseSchema, BaseResponse
+from app.schemas.student import StudentBriefResponse
 from app.models.lesson import GradeType
 
 
@@ -66,14 +67,14 @@ class HomeworkCreate(BaseSchema):
     lesson_id: uuid.UUID
     title: str = Field(..., min_length=2, max_length=200, examples=["Reading: Pages 45-50"])
     description: Optional[str] = None
-    due_date: Optional[date] = None
+    due_date: Optional[datetime] = None
     max_score: Decimal = Field(default=Decimal("100.00"), gt=0, le=1000)
     file_url: Optional[str] = Field(None, max_length=255)
 
     @field_validator("due_date")
     @classmethod
-    def due_future(cls, v: Optional[date]) -> Optional[date]:
-        if v and v < date.today():
+    def due_future(cls, v: Optional[datetime]) -> Optional[datetime]:
+        if v and v < datetime.now(timezone.utc):
             raise ValueError("Topshirish muddati o'tgan sana bo'lishi mumkin emas")
         return v
 
@@ -81,7 +82,7 @@ class HomeworkCreate(BaseSchema):
 class HomeworkUpdate(BaseSchema):
     title: Optional[str] = Field(None, min_length=2, max_length=200)
     description: Optional[str] = None
-    due_date: Optional[date] = None
+    due_date: Optional[datetime] = None
     max_score: Optional[Decimal] = Field(None, gt=0, le=1000)
     file_url: Optional[str] = None
 
@@ -90,7 +91,7 @@ class HomeworkResponse(BaseResponse):
     lesson_id: uuid.UUID
     title: str
     description: Optional[str]
-    due_date: Optional[date]
+    due_date: Optional[datetime]
     max_score: Decimal
     file_url: Optional[str]
 
@@ -109,6 +110,7 @@ class HomeworkSubmissionResponse(BaseResponse):
     student_id: uuid.UUID
     content_text: Optional[str]
     file_url: Optional[str]
+    student: Optional[StudentBriefResponse] = None
 
 
 # ── Grade Schemas ──────────────────────────────────────────────────────────────
