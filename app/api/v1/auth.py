@@ -222,8 +222,8 @@ async def update_password(
     if not verify_password(data.old_password, current_user.password_hash):
         raise HTTPException(status_code=400, detail="Eski parol noto'g'ri")
         
-    from app.core.security import get_password_hash
-    current_user.password_hash = get_password_hash(data.new_password)
+    from app.core.security import hash_password
+    current_user.password_hash = hash_password(data.new_password)
     await db.commit()
     
     return {"detail": "Parol muvaffaqiyatli o'zgartirildi"}
